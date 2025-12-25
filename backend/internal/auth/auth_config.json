@@ -1,0 +1,10 @@
+{
+  "tokens": [
+    {
+      "auth": "Social",
+      "refreshToken": "test_token_123",
+      "group": "banned",
+      "status": "banned"
+    }
+  ]
+}
