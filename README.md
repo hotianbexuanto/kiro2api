@@ -47,12 +47,45 @@ export ANTHROPIC_API_KEY="your-api-key"
 
 ## API 端点
 
+### 基础端点
+
 | 端点 | 说明 |
 |------|------|
 | `GET /v1/models` | 模型列表 |
-| `POST /v1/messages` | Anthropic API |
-| `POST /v1/chat/completions` | OpenAI API |
+| `POST /v1/messages` | Anthropic API（使用 default 分组） |
+| `POST /v1/chat/completions` | OpenAI API（使用 default 分组） |
 | `GET /api/tokens` | Token 池状态 |
+
+### 分组端点
+
+**⚠️ 重要**：默认情况下，所有请求使用 `default` 分组。要使用其他分组（如 `pro`），需要在路径中指定分组名称：
+
+| 端点 | 说明 |
+|------|------|
+| `POST /:group/v1/messages` | 使用指定分组的 Anthropic API |
+| `POST /:group/v1/chat/completions` | 使用指定分组的 OpenAI API |
+
+**示例**：
+```bash
+# 使用 default 分组（默认）
+curl -X POST http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer 123456" \
+  -d '{"model":"claude-sonnet-4-20250514","messages":[...]}'
+
+# 使用 pro 分组
+curl -X POST http://localhost:8080/pro/v1/messages \
+  -H "Authorization: Bearer 123456" \
+  -d '{"model":"claude-sonnet-4-20250514","messages":[...]}'
+```
+
+**Claude Code 配置**：
+```bash
+# 使用 default 分组
+export ANTHROPIC_BASE_URL="http://localhost:8080/v1"
+
+# 使用 pro 分组
+export ANTHROPIC_BASE_URL="http://localhost:8080/pro/v1"
+```
 
 ## 支持模型
 
