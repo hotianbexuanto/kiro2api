@@ -7,6 +7,7 @@ import (
 	"kiro2api/internal/logger"
 	"kiro2api/internal/stats"
 	"kiro2api/internal/types"
+	"kiro2api/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -50,15 +51,14 @@ func (trl *TokenRequestLifecycle) GetToken() (types.TokenInfo, error) {
 
 // GetTokenWithUsage 获取 token（包含使用信息）并开始请求追踪
 func (trl *TokenRequestLifecycle) GetTokenWithUsage() (*types.TokenWithUsage, error) {
-	// 提取用户标识（IP + API Key）用于 token 粘性
-	userID := trl.c.ClientIP()
-	if apiKey, exists := trl.c.Get("api_key"); exists {
-		if key, ok := apiKey.(string); ok {
-			userID += "|" + key
-		}
+	// 使用会话 ID 作为粘性标识
+	sessionID := trl.c.GetHeader("X-Conversation-ID")
+	if sessionID == "" {
+		// 如果没有自定义会话 ID，使用生成的会话 ID
+		sessionID = utils.GenerateStableConversationID(trl.c)
 	}
 
-	tokenWithUsage, err := trl.authService.GetTokenWithUsage(trl.group, userID)
+	tokenWithUsage, err := trl.authService.GetTokenWithUsage(trl.group, sessionID)
 	if err != nil {
 		return nil, err
 	}

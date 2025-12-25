@@ -148,11 +148,11 @@ func (as *AuthService) GetToken(group string) (types.TokenInfo, error) {
 }
 
 // GetTokenWithUsage 获取可用的token（包含使用信息）
-func (as *AuthService) GetTokenWithUsage(group string, userID string) (*types.TokenWithUsage, error) {
+func (as *AuthService) GetTokenWithUsage(group string, sessionID string) (*types.TokenWithUsage, error) {
 	if as.poolManager == nil {
 		return nil, fmt.Errorf("token管理器未初始化")
 	}
-	return as.poolManager.GetBestTokenWithUsage(group, userID)
+	return as.poolManager.GetBestTokenWithUsage(group, sessionID)
 }
 
 // GetPoolManager 获取底层的 TokenPoolManager

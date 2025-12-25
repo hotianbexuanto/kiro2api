@@ -263,7 +263,7 @@ func (tpm *TokenPoolManager) GetBestToken(group string) (types.TokenInfo, error)
 }
 
 // GetBestTokenWithUsage 获取最优 Token (包含使用信息)
-func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string, userID string) (*types.TokenWithUsage, error) {
+func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string, sessionID string) (*types.TokenWithUsage, error) {
 	if group == "" {
 		group = GetDefaultGroup()
 	}
@@ -284,8 +284,8 @@ func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string, userID string) 
 		tpm.triggerAsyncRefresh()
 	}
 
-	// 在分组池内选择 (使用用户粘性策略，使用保存的cacheRef)
-	selected := pool.roundRobinSelect(cacheRef, userID)
+	// 在分组池内选择 (使用会话粘性策略，使用保存的cacheRef)
+	selected := pool.roundRobinSelect(cacheRef, sessionID)
 	if selected == nil {
 		return nil, fmt.Errorf("分组 %s 没有可用的 Token", group)
 	}
@@ -315,9 +315,9 @@ func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string, userID string) 
 	}, nil
 }
 
-// roundRobinSelect 选择 Token (支持用户粘性)
+// roundRobinSelect 选择 Token (支持会话粘性)
 // 调用者不需要持有 pool.mu
-func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache, userID string) *PooledToken {
+func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache, sessionID string) *PooledToken {
 	now := time.Now()
 	tokenCount := len(gp.tokens)
 	if tokenCount == 0 {
@@ -328,31 +328,36 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache, userID string) *P
 	const maxRetries = 5                  // 最多重试 5 次
 	const retryDelay = 50 * time.Millisecond // 每次重试间隔 50ms
 
-	// 计算用户粘性索引（如果提供了 userID）
+	// 计算会话粘性索引（如果提供了 sessionID）
 	var preferredIndex int = -1
-	if userID != "" {
+	if sessionID != "" {
 		// 使用简单的 hash 计算固定索引
 		hash := uint64(0)
-		for i := 0; i < len(userID); i++ {
-			hash = hash*31 + uint64(userID[i])
+		for i := 0; i < len(sessionID); i++ {
+			hash = hash*31 + uint64(sessionID[i])
 		}
 		preferredIndex = int(hash % uint64(tokenCount))
 	}
 
+	// 只在第一次尝试时使用粘性 token
+	// 如果不可用，立即切换到轮询（不等待）
+	if preferredIndex >= 0 {
+		pt := gp.tokens[preferredIndex]
+		if gp.isTokenAvailable(pt, cache, now) {
+			logger.Info("会话粘性选择Token",
+				logger.Int("config_index", pt.ConfigIndex),
+				logger.Int("preferred_index", preferredIndex),
+				logger.String("session_id_prefix", sessionID[:minInt(20, len(sessionID))]))
+			return pt
+		}
+		// 粘性 token 不可用，记录日志后立即切换
+		logger.Warn("会话粘性Token不可用，切换到轮询",
+			logger.Int("preferred_index", preferredIndex),
+			logger.String("session_id_prefix", sessionID[:minInt(20, len(sessionID))]))
+	}
+
 	// 多轮遍历，避免高并发时所有 token 都达到上限导致失败
 	for retry := 0; retry < maxRetries; retry++ {
-		// 如果有用户粘性，优先尝试固定的 token
-		if preferredIndex >= 0 && retry == 0 {
-			pt := gp.tokens[preferredIndex]
-			if gp.isTokenAvailable(pt, cache, now) {
-				logger.Info("用户粘性选择Token",
-					logger.Int("config_index", pt.ConfigIndex),
-					logger.Int("preferred_index", preferredIndex),
-					logger.String("user_id_prefix", userID[:minInt(20, len(userID))]))
-				return pt
-			}
-		}
-
 		// 遍历一轮所有 token（轮询策略）
 		for i := 0; i < tokenCount; i++ {
 			// 原子获取并递增索引
@@ -365,7 +370,7 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache, userID string) *P
 						logger.Int("config_index", pt.ConfigIndex),
 						logger.Int("retry", retry))
 				} else {
-					logger.Info("轮询选择Token（降级）",
+					logger.Info("轮询选择Token",
 						logger.Int("config_index", pt.ConfigIndex))
 				}
 				return pt
