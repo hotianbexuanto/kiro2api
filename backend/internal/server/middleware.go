@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"kiro2api/internal/auth"
+	"kiro2api/internal/config"
 	"kiro2api/internal/logger"
 	"kiro2api/internal/server/handler"
 	"kiro2api/internal/stats"
@@ -282,24 +283,26 @@ func StatsMiddleware() gin.HandlerFunc {
 			actualInputTokens := int(record.ContextUsagePercent / 100 * 200000)
 
 			// 根据 credit 反推 output tokens
-			// 公式: credit = (input × 3 + output × 15) / 1,000,000
-			// 所以: output = (credit × 1,000,000 - input × 3) / 15
+			// 公式: credit = (input × inputPrice + output × outputPrice) / 1,000,000
+			// 所以: output = (credit × 1,000,000 - input × inputPrice) / outputPrice
 			var calculatedOutputTokens int
 			if record.CreditUsage > 0 && actualInputTokens > 0 {
-				calculatedOutputTokens = int((record.CreditUsage*1000000 - float64(actualInputTokens)*3) / 15)
+				// 获取模型定价
+				pricing := config.GetModelPricing(record.Model)
+				calculatedOutputTokens = int((record.CreditUsage*1000000 - float64(actualInputTokens)*pricing.InputPrice) / pricing.OutputPrice)
 				if calculatedOutputTokens < 0 {
 					calculatedOutputTokens = 0 // 可能是缓存命中，input 成本降低
 				}
 			}
 
 			// 检测缓存命中：基于 Anthropic Prompt Caching 计价规则
-			// Cache read: 0.3 / MTok (10% of regular)
-			// Regular input: 3 / MTok
-			// Output: 15 / MTok
 			var cacheHit bool
 			if record.CreditUsage > 0 && actualInputTokens > 0 && calculatedOutputTokens >= 0 {
+				// 获取模型定价
+				pricing := config.GetModelPricing(record.Model)
+
 				// 计算期望 credit（无缓存）
-				expectedCredit := float64(actualInputTokens)*3/1000000 + float64(calculatedOutputTokens)*15/1000000
+				expectedCredit := float64(actualInputTokens)*pricing.InputPrice/1000000 + float64(calculatedOutputTokens)*pricing.OutputPrice/1000000
 
 				// 如果实际 credit 显著低于期望值，说明有缓存命中
 				// 缓存价格是 0.1x，所以阈值设为 0.6（考虑部分缓存的情况）

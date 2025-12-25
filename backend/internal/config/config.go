@@ -33,6 +33,51 @@ var ModelMap = map[string]string{
 	"claude-opus-4-20250514": "claude-opus-4.5",
 }
 
+// ModelPricing 模型定价信息（每百万 tokens）
+type ModelPricing struct {
+	InputPrice  float64 // 输入价格
+	OutputPrice float64 // 输出价格
+	CacheRead   float64 // 缓存读取价格
+}
+
+// ModelPricingMap 模型定价映射表（基于 Anthropic 官方定价）
+var ModelPricingMap = map[string]ModelPricing{
+	// Opus 4.5
+	"claude-opus-4-5":          {InputPrice: 5, OutputPrice: 25, CacheRead: 0.50},
+	"claude-opus-4-5-20251101": {InputPrice: 5, OutputPrice: 25, CacheRead: 0.50},
+	// Opus 4.1
+	"claude-opus-4-1":          {InputPrice: 15, OutputPrice: 75, CacheRead: 1.50},
+	"claude-opus-4-1-20250805": {InputPrice: 15, OutputPrice: 75, CacheRead: 1.50},
+	// Opus 4
+	"claude-opus-4-0":        {InputPrice: 15, OutputPrice: 75, CacheRead: 1.50},
+	"claude-opus-4-20250514": {InputPrice: 15, OutputPrice: 75, CacheRead: 1.50},
+	// Sonnet 4.5 (≤200K tokens)
+	"claude-sonnet-4-5":          {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	"claude-sonnet-4-5-20250929": {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	// Sonnet 4
+	"claude-sonnet-4-0":        {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	"claude-sonnet-4-20250514": {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	// Sonnet 3.7
+	"claude-3-7-sonnet-latest":   {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	"claude-3-7-sonnet-20250219": {InputPrice: 3, OutputPrice: 15, CacheRead: 0.30},
+	// Haiku 4.5
+	"claude-haiku-4-5":          {InputPrice: 1, OutputPrice: 5, CacheRead: 0.10},
+	"claude-haiku-4-5-20251001": {InputPrice: 1, OutputPrice: 5, CacheRead: 0.10},
+	// Haiku 3.5
+	"claude-3-5-haiku-20241022": {InputPrice: 1, OutputPrice: 5, CacheRead: 0.10},
+	// Haiku 3
+	"claude-3-haiku-20240307": {InputPrice: 0.25, OutputPrice: 1.25, CacheRead: 0.03},
+}
+
+// GetModelPricing 获取模型定价，如果找不到则返回 Sonnet 4.5 的默认定价
+func GetModelPricing(model string) ModelPricing {
+	if pricing, ok := ModelPricingMap[model]; ok {
+		return pricing
+	}
+	// 默认使用 Sonnet 4.5 定价
+	return ModelPricing{InputPrice: 3, OutputPrice: 15, CacheRead: 0.30}
+}
+
 // RefreshTokenURL 刷新token的URL (social方式)
 const RefreshTokenURL = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
 

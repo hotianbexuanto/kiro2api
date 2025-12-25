@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"kiro2api/internal/config"
 	"kiro2api/internal/logger"
 
 	_ "modernc.org/sqlite"
@@ -113,14 +114,14 @@ func persistRecordToDB(db *sql.DB, r RequestRecord) {
 	var cacheHit int
 
 	if r.CreditUsage > 0 && actualInputTokens > 0 {
-		calculatedOutputTokens = int((r.CreditUsage*1000000 - float64(actualInputTokens)*3) / 15)
+		// 获取模型定价
+		pricing := config.GetModelPricing(r.Model)
+		calculatedOutputTokens = int((r.CreditUsage*1000000 - float64(actualInputTokens)*pricing.InputPrice) / pricing.OutputPrice)
 		if calculatedOutputTokens < 0 {
 			calculatedOutputTokens = 0
 		}
 		// 检测缓存：基于 Anthropic Prompt Caching 计价规则
-		// Cache read: 0.3 / MTok (10% of regular)
-		// Regular input: 3 / MTok, Output: 15 / MTok
-		expectedCredit := float64(actualInputTokens)*3/1000000 + float64(calculatedOutputTokens)*15/1000000
+		expectedCredit := float64(actualInputTokens)*pricing.InputPrice/1000000 + float64(calculatedOutputTokens)*pricing.OutputPrice/1000000
 		if r.CreditUsage < expectedCredit*0.6 {
 			cacheHit = 1
 		}
