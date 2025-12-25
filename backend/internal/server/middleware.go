@@ -292,12 +292,18 @@ func StatsMiddleware() gin.HandlerFunc {
 				}
 			}
 
-			// 检测缓存命中：如果 credit 异常低，说明有缓存
-			// 缓存价格是正常价格的 0.1x
+			// 检测缓存命中：基于 Anthropic Prompt Caching 计价规则
+			// Cache read: 0.3 / MTok (10% of regular)
+			// Regular input: 3 / MTok
+			// Output: 15 / MTok
 			var cacheHit bool
-			if record.CreditUsage > 0 && actualInputTokens > 0 {
-				expectedCredit := float64(actualInputTokens)*3/1000000 + float64(record.OutputTokens)*15/1000000
-				if record.CreditUsage < expectedCredit*0.5 {
+			if record.CreditUsage > 0 && actualInputTokens > 0 && calculatedOutputTokens >= 0 {
+				// 计算期望 credit（无缓存）
+				expectedCredit := float64(actualInputTokens)*3/1000000 + float64(calculatedOutputTokens)*15/1000000
+
+				// 如果实际 credit 显著低于期望值，说明有缓存命中
+				// 缓存价格是 0.1x，所以阈值设为 0.6（考虑部分缓存的情况）
+				if record.CreditUsage < expectedCredit*0.6 {
 					cacheHit = true
 				}
 			}

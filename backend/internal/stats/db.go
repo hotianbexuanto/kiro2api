@@ -117,9 +117,11 @@ func persistRecordToDB(db *sql.DB, r RequestRecord) {
 		if calculatedOutputTokens < 0 {
 			calculatedOutputTokens = 0
 		}
-		// 检测缓存
-		expectedCredit := float64(actualInputTokens)*3/1000000 + float64(r.OutputTokens)*15/1000000
-		if r.CreditUsage < expectedCredit*0.5 {
+		// 检测缓存：基于 Anthropic Prompt Caching 计价规则
+		// Cache read: 0.3 / MTok (10% of regular)
+		// Regular input: 3 / MTok, Output: 15 / MTok
+		expectedCredit := float64(actualInputTokens)*3/1000000 + float64(calculatedOutputTokens)*15/1000000
+		if r.CreditUsage < expectedCredit*0.6 {
 			cacheHit = 1
 		}
 	}
