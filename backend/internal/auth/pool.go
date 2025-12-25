@@ -325,8 +325,8 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
 	}
 
 	const defaultMaxConcurrent = int32(5) // 默认最大并发
-	const maxRetries = 3                  // 最多重试 3 次
-	const retryDelay = 10 * time.Millisecond // 每次重试间隔 10ms
+	const maxRetries = 5                  // 最多重试 5 次
+	const retryDelay = 50 * time.Millisecond // 每次重试间隔 50ms
 
 	// 多轮遍历，避免高并发时所有 token 都达到上限导致失败
 	for retry := 0; retry < maxRetries; retry++ {
@@ -387,18 +387,20 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
 
 		// 一轮遍历后没找到，等待一小段时间后重试
 		if retry < maxRetries-1 {
-			logger.Debug("所有Token暂时不可用，等待后重试",
+			logger.Warn("所有Token暂时不可用，等待后重试",
 				logger.Int("retry", retry+1),
-				logger.Int("token_count", tokenCount))
+				logger.Int("token_count", tokenCount),
+				logger.String("group", gp.name))
 			time.Sleep(retryDelay)
 			now = time.Now() // 更新时间，重新检查冷却状态
 		}
 	}
 
 	// 多轮重试后仍然没有可用 token
-	logger.Warn("多轮重试后仍无可用Token",
+	logger.Error("多轮重试后仍无可用Token",
 		logger.Int("token_count", tokenCount),
-		logger.Int("max_retries", maxRetries))
+		logger.Int("max_retries", maxRetries),
+		logger.String("group", gp.name))
 	return nil
 }
 
