@@ -38,91 +38,45 @@ func NewConversationIDManager() *ConversationIDManager {
 }
 
 // GenerateConversationID 生成会话ID
-// 支持多种客户端 session 标识，优先级从高到低：
-// 1. X-Conversation-ID (自定义会话 ID)
-// 2. X-Session-ID / Session-ID (通用 session 头)
-// 3. 基于 IP+UA+时间窗口 生成稳定会话 ID
+// 基于 IP + UA + 时间窗口生成稳定的会话 ID
+// 同一客户端在时间窗口内使用相同的会话 ID
 func (c *ConversationIDManager) GenerateConversationID(ctx *gin.Context) string {
-	// 记录所有可能的 session 相关头（用于调试）
-	allHeaders := map[string]string{
-		"X-Conversation-ID": ctx.GetHeader("X-Conversation-ID"),
-		"X-Session-ID":      ctx.GetHeader("X-Session-ID"),
-		"Session-ID":        ctx.GetHeader("Session-ID"),
-		"X-Session-Id":      ctx.GetHeader("X-Session-Id"),
-		"Session-Id":        ctx.GetHeader("Session-Id"),
-		"X-Request-ID":      ctx.GetHeader("X-Request-ID"),
-		"User-Agent":        ctx.GetHeader("User-Agent"),
-	}
-
-	// 临时日志：记录所有请求头（调试用）
-	hasAnySession := false
-	for k, v := range allHeaders {
-		if v != "" && k != "User-Agent" {
-			hasAnySession = true
-			break
-		}
-	}
-	if hasAnySession {
-		fmt.Printf("[DEBUG] Session headers: %+v\n", allHeaders)
-	}
-
 	// 1. 优先使用客户端提供的会话 ID
 	if customConvID := ctx.GetHeader("X-Conversation-ID"); customConvID != "" {
 		return customConvID
 	}
 
-	// 2. 检查通用 session 头（Claude Code 可能使用）
-	sessionID := ctx.GetHeader("X-Session-ID")
-	if sessionID == "" {
-		sessionID = ctx.GetHeader("Session-ID")
+	// 2. 基于 IP + UA + 时间窗口生成稳定会话 ID
+	clientIP := ctx.ClientIP()
+	userAgent := ctx.GetHeader("User-Agent")
+	windowMinutes := sessionDurationMin
+	if windowMinutes <= 0 {
+		windowMinutes = 60
 	}
-	if sessionID == "" {
-		sessionID = ctx.GetHeader("X-Session-Id")
-	}
-	if sessionID == "" {
-		sessionID = ctx.GetHeader("Session-Id")
-	}
+	windowStart := time.Now().Unix() / int64(windowMinutes*60)
+	timeWindow := fmt.Sprintf("%d", windowStart)
 
-	if sessionID != "" {
-		// 有 session ID，基于它生成稳定的会话 ID
-		clientIP := ctx.ClientIP()
-		userAgent := ctx.GetHeader("User-Agent")
-		windowMinutes := sessionDurationMin
-		if windowMinutes <= 0 {
-			windowMinutes = 60
-		}
-		windowStart := time.Now().Unix() / int64(windowMinutes*60)
-		timeWindow := fmt.Sprintf("%d", windowStart)
+	// 使用 IP + UA + 时间窗口生成稳定会话 ID
+	clientSignature := fmt.Sprintf("%s|%s|%s", clientIP, userAgent, timeWindow)
 
-		// 使用 session ID + IP + UA + 时间窗口生成稳定会话 ID
-		clientSignature := fmt.Sprintf("%s|%s|%s|%s", sessionID, clientIP, userAgent, timeWindow)
-
-		// 检查缓存
-		c.mu.RLock()
-		if cachedID, exists := c.cache[clientSignature]; exists {
-			c.mu.RUnlock()
-			fmt.Printf("[DEBUG] Using cached conversation ID: %s for session: %s\n", cachedID, sessionID)
-			return cachedID
-		}
+	// 检查缓存
+	c.mu.RLock()
+	if cachedID, exists := c.cache[clientSignature]; exists {
 		c.mu.RUnlock()
-
-		// 生成基于特征的 MD5 哈希
-		hash := md5.Sum([]byte(clientSignature))
-		conversationID := fmt.Sprintf("conv-%x", hash[:8])
-
-		// 缓存结果
-		c.mu.Lock()
-		c.cache[clientSignature] = conversationID
-		c.mu.Unlock()
-
-		fmt.Printf("[DEBUG] Generated new conversation ID: %s for session: %s\n", conversationID, sessionID)
-		return conversationID
+		return cachedID
 	}
+	c.mu.RUnlock()
 
-	// 3. 没有任何 session 标识，生成随机 UUID
-	randomID := fmt.Sprintf("conv-%s", GenerateUUID())
-	fmt.Printf("[DEBUG] No session ID found, using random UUID: %s\n", randomID)
-	return randomID
+	// 生成基于特征的 MD5 哈希
+	hash := md5.Sum([]byte(clientSignature))
+	conversationID := fmt.Sprintf("conv-%x", hash[:8])
+
+	// 缓存结果
+	c.mu.Lock()
+	c.cache[clientSignature] = conversationID
+	c.mu.Unlock()
+
+	return conversationID
 }
 
 // GetOrCreateConversationID 获取或创建会话ID
