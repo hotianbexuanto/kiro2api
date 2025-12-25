@@ -615,8 +615,9 @@ func (tpm *TokenPoolManager) UpdateConfigs(configs []AuthConfig) {
 	defer tpm.globalMu.Unlock()
 
 	tpm.configs = configs
-	tpm.cache.tokens = make(map[string]*CachedToken)
-	tpm.lastRefresh = time.Time{}
+	// 不清空缓存，保留已刷新的 token
+	// tpm.cache.tokens = make(map[string]*CachedToken)
+	// tpm.lastRefresh = time.Time{}
 	tpm.rebuildPools()
 
 	logger.Info("TokenPoolManager配置已热更新",
