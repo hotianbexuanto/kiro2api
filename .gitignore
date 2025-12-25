@@ -34,12 +34,15 @@ backend/static/
 .env.local
 .env.*.local
 
-# IDE
+# IDE & Code Tools
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.ace_tool/
+.ace-tool/
+.claude/
 
 # OS
 .DS_Store
