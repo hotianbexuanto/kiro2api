@@ -46,13 +46,31 @@ func NewSimpleTokenCache(ttl time.Duration) *SimpleTokenCache {
 	}
 }
 
-// CalculateAvailableCount 计算可用额度
+// CalculateAvailableCount 计算可用额度 (base + free_trial)
 func CalculateAvailableCount(usage *types.UsageLimits) float64 {
 	if usage == nil || len(usage.UsageBreakdownList) == 0 {
 		return 0
 	}
-	breakdown := usage.UsageBreakdownList[0]
-	return breakdown.UsageLimitWithPrecision - breakdown.CurrentUsageWithPrecision
+
+	for _, breakdown := range usage.UsageBreakdownList {
+		if breakdown.ResourceType == "CREDIT" {
+			var total float64
+
+			// 基础额度
+			total += breakdown.UsageLimitWithPrecision - breakdown.CurrentUsageWithPrecision
+
+			// 免费试用额度
+			if breakdown.FreeTrialInfo != nil && breakdown.FreeTrialInfo.FreeTrialStatus == "ACTIVE" {
+				total += breakdown.FreeTrialInfo.UsageLimitWithPrecision - breakdown.FreeTrialInfo.CurrentUsageWithPrecision
+			}
+
+			if total < 0 {
+				return 0
+			}
+			return total
+		}
+	}
+	return 0
 }
 
 // GroupPool 单个分组的 Token 池
@@ -109,50 +127,74 @@ func NewTokenPoolManager(configs []AuthConfig, groupMgr *GroupManager, repo *Tok
 
 // initCacheSync 同步初始化缓存（启动时调用）
 func (tpm *TokenPoolManager) initCacheSync() {
-	logger.Info("开始同步初始化Token缓存", logger.Int("config_count", len(tpm.configs)))
+	logger.Info("开始全量刷新Token缓存", logger.Int("config_count", len(tpm.configs)))
 
-	initialized := 0
-	refreshed := 0
-	futureTime := time.Now().Add(24 * time.Hour)
-
+	// 收集需要刷新的配置
+	type refreshTask struct {
+		index int
+		cfg   AuthConfig
+	}
+	var tasks []refreshTask
 	for i, cfg := range tpm.configs {
 		if cfg.Disabled || cfg.Status == TokenStatusBanned || cfg.Status == TokenStatusExhausted {
 			continue
 		}
-
-		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, i)
-
-		// 尝试同步刷新前10个 token（确保启动后立即可用）
-		if refreshed < 10 {
-			if token, err := refreshSingleTokenStatic(cfg); err == nil {
-				token.ID = cfg.TokenID // 设置 Token ID
-				tpm.cache.mu.Lock()
-				tpm.cache.tokens[cacheKey] = &CachedToken{
-					Token:     token,
-					CachedAt:  time.Now(),
-					Available: 550,
-				}
-				tpm.cache.mu.Unlock()
-				refreshed++
-				initialized++
-				continue
-			}
-		}
-
-		// 其余 token 使用占位缓存
-		tpm.cache.mu.Lock()
-		tpm.cache.tokens[cacheKey] = &CachedToken{
-			Token:     types.TokenInfo{ID: cfg.TokenID, ExpiresAt: futureTime},
-			CachedAt:  time.Now(),
-			Available: 550,
-		}
-		tpm.cache.mu.Unlock()
-		initialized++
+		tasks = append(tasks, refreshTask{index: i, cfg: cfg})
 	}
 
+	if len(tasks) == 0 {
+		logger.Warn("没有可用的Token需要刷新")
+		return
+	}
+
+	// 并发刷新（20个goroutine）
+	const concurrency = 20
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var refreshed, failed int32
+
+	for _, task := range tasks {
+		wg.Add(1)
+		go func(t refreshTask) {
+			defer wg.Done()
+
+			// 限流信号量
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, t.index)
+			token, err := refreshSingleTokenStatic(t.cfg)
+			if err != nil {
+				atomic.AddInt32(&failed, 1)
+				logger.Debug("刷新Token失败",
+					logger.Int("index", t.index),
+					logger.Int64("token_id", t.cfg.TokenID),
+					logger.String("error", err.Error()))
+				return
+			}
+
+			// 刷新成功，写入缓存
+			token.ID = t.cfg.TokenID
+			tpm.cache.mu.Lock()
+			tpm.cache.tokens[cacheKey] = &CachedToken{
+				Token:     token,
+				CachedAt:  time.Now(),
+				Available: 550,
+			}
+			tpm.cache.mu.Unlock()
+			atomic.AddInt32(&refreshed, 1)
+
+			// 限速：每个请求间隔 50ms
+			time.Sleep(50 * time.Millisecond)
+		}(task)
+	}
+
+	wg.Wait()
+
 	logger.Info("Token缓存初始化完成",
-		logger.Int("initialized", initialized),
-		logger.Int("refreshed", refreshed))
+		logger.Int("total", len(tasks)),
+		logger.Int("refreshed", int(refreshed)),
+		logger.Int("failed", int(failed)))
 }
 
 // rebuildPools 根据配置重建分组池
@@ -283,53 +325,80 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
 	}
 
 	const defaultMaxConcurrent = int32(5) // 默认最大并发
+	const maxRetries = 3                  // 最多重试 3 次
+	const retryDelay = 10 * time.Millisecond // 每次重试间隔 10ms
 
-	// 最多遍历一轮
-	for i := 0; i < tokenCount; i++ {
-		// 原子获取并递增索引
-		idx := atomic.AddUint64(&gp.roundRobinIndex, 1)
-		pt := gp.tokens[int(idx)%tokenCount]
+	// 多轮遍历，避免高并发时所有 token 都达到上限导致失败
+	for retry := 0; retry < maxRetries; retry++ {
+		// 遍历一轮所有 token
+		for i := 0; i < tokenCount; i++ {
+			// 原子获取并递增索引
+			idx := atomic.AddUint64(&gp.roundRobinIndex, 1)
+			pt := gp.tokens[int(idx)%tokenCount]
 
-		// 跳过禁用/封禁/耗尽
-		if pt.Config.Disabled || pt.Config.Status == TokenStatusBanned || pt.Config.Status == TokenStatusExhausted {
-			continue
+			// 跳过禁用/封禁/耗尽
+			if pt.Config.Disabled || pt.Config.Status == TokenStatusBanned || pt.Config.Status == TokenStatusExhausted {
+				continue
+			}
+
+			// 跳过冷却中
+			if cooldownUntil, ok := gp.cooldown[pt.ConfigIndex]; ok && now.Before(cooldownUntil) {
+				continue
+			}
+
+			// 获取缓存（加读锁保护并发访问）
+			cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, pt.ConfigIndex)
+			cache.mu.RLock()
+			cached, exists := cache.tokens[cacheKey]
+			cache.mu.RUnlock()
+			if !exists || !cached.IsUsable() || cached.Available <= 0 {
+				continue
+			}
+			pt.Cached = cached
+
+			// 检查并发限制
+			maxConcurrent := pt.MaxConcurrent
+			if maxConcurrent <= 0 {
+				maxConcurrent = defaultMaxConcurrent
+			}
+
+			currentInFlight := gp.getMetrics(pt.ConfigIndex, pt.Config.TokenID).InFlightCount()
+			if currentInFlight >= int64(maxConcurrent) {
+				continue
+			}
+
+			// 找到可用的 Token
+			if retry > 0 {
+				logger.Debug("轮询选择Token（重试后成功）",
+					logger.Int("config_index", pt.ConfigIndex),
+					logger.Int("retry", retry),
+					logger.Int("max_concurrent", int(maxConcurrent)),
+					logger.Int64("current_inflight", currentInFlight),
+					logger.Float64("available", cached.Available))
+			} else {
+				logger.Debug("轮询选择Token",
+					logger.Int("config_index", pt.ConfigIndex),
+					logger.Int("max_concurrent", int(maxConcurrent)),
+					logger.Int64("current_inflight", currentInFlight),
+					logger.Float64("available", cached.Available))
+			}
+			return pt
 		}
 
-		// 跳过冷却中
-		if cooldownUntil, ok := gp.cooldown[pt.ConfigIndex]; ok && now.Before(cooldownUntil) {
-			continue
+		// 一轮遍历后没找到，等待一小段时间后重试
+		if retry < maxRetries-1 {
+			logger.Debug("所有Token暂时不可用，等待后重试",
+				logger.Int("retry", retry+1),
+				logger.Int("token_count", tokenCount))
+			time.Sleep(retryDelay)
+			now = time.Now() // 更新时间，重新检查冷却状态
 		}
-
-		// 获取缓存（加读锁保护并发访问）
-		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, pt.ConfigIndex)
-		cache.mu.RLock()
-		cached, exists := cache.tokens[cacheKey]
-		cache.mu.RUnlock()
-		if !exists || !cached.IsUsable() || cached.Available <= 0 {
-			continue
-		}
-		pt.Cached = cached
-
-		// 检查并发限制
-		maxConcurrent := pt.MaxConcurrent
-		if maxConcurrent <= 0 {
-			maxConcurrent = defaultMaxConcurrent
-		}
-
-		currentInFlight := gp.getMetrics(pt.ConfigIndex, pt.Config.TokenID).InFlightCount()
-		if currentInFlight >= int64(maxConcurrent) {
-			continue
-		}
-
-		// 找到可用的 Token
-		logger.Debug("轮询选择Token",
-			logger.Int("config_index", pt.ConfigIndex),
-			logger.Int("max_concurrent", int(maxConcurrent)),
-			logger.Int64("current_inflight", currentInFlight),
-			logger.Float64("available", cached.Available))
-		return pt
 	}
 
+	// 多轮重试后仍然没有可用 token
+	logger.Warn("多轮重试后仍无可用Token",
+		logger.Int("token_count", tokenCount),
+		logger.Int("max_retries", maxRetries))
 	return nil
 }
 

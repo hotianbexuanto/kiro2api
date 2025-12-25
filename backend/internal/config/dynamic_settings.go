@@ -22,6 +22,9 @@ type Settings struct {
 
 	// Token 刷新并发数（默认 5）
 	RefreshConcurrency int `json:"refresh_concurrency"`
+
+	// 会话 ID 持续时间（分钟，默认 60）
+	SessionDurationMin int `json:"session_duration_min"`
 }
 
 const settingsKey = "global_settings"

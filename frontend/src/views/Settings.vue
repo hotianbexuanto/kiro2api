@@ -56,7 +56,7 @@
       <!-- 请求设置 -->
       <div class="card p-6">
         <h2 class="text-base font-medium text-gray-800 mb-4">请求设置</h2>
-        <div class="grid grid-cols-4 gap-4">
+        <div class="grid grid-cols-5 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-600 mb-1.5">超时时间 (秒)</label>
             <input
@@ -91,6 +91,17 @@
               class="w-full px-3 py-2.5 border border-[var(--border-subtle)] rounded-lg bg-gray-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all"
             />
             <p class="text-xs text-gray-400 mt-1.5">同时刷新的 Token 数</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1.5">会话持续 (分钟)</label>
+            <input
+              v-model.number="form.session_duration_min"
+              type="number"
+              min="1"
+              max="1440"
+              class="w-full px-3 py-2.5 border border-[var(--border-subtle)] rounded-lg bg-gray-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all"
+            />
+            <p class="text-xs text-gray-400 mt-1.5">会话 ID 有效期</p>
           </div>
         </div>
       </div>
@@ -167,6 +178,7 @@ const form = ref<Settings>({
   token_max_concurrent: 0,
   group_max_concurrent: 0,
   refresh_concurrency: 20,
+  session_duration_min: 60,
 })
 
 const saving = ref(false)

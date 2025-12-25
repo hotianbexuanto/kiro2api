@@ -67,6 +67,14 @@ func InitLogDB(dbPath string) error {
 			return
 		}
 
+		// 启用 WAL 模式（Write-Ahead Logging）
+		// WAL 模式允许读写并发，避免 SQLITE_BUSY 错误
+		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+			logDBErr = err
+			db.Close()
+			return
+		}
+
 		// 设置连接池（WAL 模式支持 1写+多读并发）
 		db.SetMaxOpenConns(5)            // 允许 5 个并发连接
 		db.SetMaxIdleConns(2)            // 保持 2 个空闲连接

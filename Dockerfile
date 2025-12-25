@@ -58,7 +58,7 @@ COPY --from=builder /app/backend/kiro2api .
 COPY --from=builder /app/backend/static ./static
 
 # 创建必要的目录并设置权限
-RUN mkdir -p /home/appuser/.aws/sso/cache && \
+RUN mkdir -p /home/appuser/.aws/sso/cache /app/data && \
     chown -R appuser:appgroup /app /home/appuser
 
 # 切换到非 root 用户

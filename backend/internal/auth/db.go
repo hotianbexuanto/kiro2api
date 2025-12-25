@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS tokens (
     access_token TEXT,
     access_token_expires_at DATETIME,
     available_usage REAL DEFAULT 0,
+    base_usage REAL DEFAULT 0,
+    free_trial_usage REAL DEFAULT 0,
     total_limit REAL DEFAULT 0,
     current_usage REAL DEFAULT 0,
     last_verified_at DATETIME,

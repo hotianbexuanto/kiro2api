@@ -120,6 +120,7 @@ export interface Settings {
   token_max_concurrent: number
   group_max_concurrent: number
   refresh_concurrency: number
+  session_duration_min: number
 }
 
 export interface RateLimiterStats {

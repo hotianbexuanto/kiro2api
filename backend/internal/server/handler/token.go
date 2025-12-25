@@ -55,18 +55,20 @@ func ListTokens(c *gin.Context, authService *auth.AuthService) {
 	tokenList := make([]any, 0, len(tokens))
 	for _, t := range tokens {
 		tokenData := map[string]any{
-			"id":              t.ID,
-			"index":           t.ID, // 兼容旧接口
-			"user_email":      maskEmail(t.UserEmail),
-			"token_preview":   createTokenPreview(t.RefreshToken),
-			"auth_type":       strings.ToLower(t.AuthType),
-			"remaining_usage": t.AvailableUsage,
-			"expires_at":      formatTime(t.AccessTokenExpiresAt),
-			"last_used":       formatTime(t.LastUsedAt),
-			"last_verified":   formatTime(t.LastVerifiedAt),
-			"status":          getStatus(t),
-			"group":           t.GroupName,
-			"name":            t.Name,
+			"id":               t.ID,
+			"index":            t.ID, // 兼容旧接口
+			"user_email":       maskEmail(t.UserEmail),
+			"token_preview":    createTokenPreview(t.RefreshToken),
+			"auth_type":        strings.ToLower(t.AuthType),
+			"remaining_usage":  t.AvailableUsage,
+			"base_usage":       t.BaseUsage,
+			"free_trial_usage": t.FreeTrialUsage,
+			"expires_at":       formatTime(t.AccessTokenExpiresAt),
+			"last_used":        formatTime(t.LastUsedAt),
+			"last_verified":    formatTime(t.LastVerifiedAt),
+			"status":           getStatus(t),
+			"group":            t.GroupName,
+			"name":             t.Name,
 		}
 
 		if t.ErrorMsg != "" {

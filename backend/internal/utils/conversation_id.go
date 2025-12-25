@@ -9,6 +9,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// 会话持续时间（分钟），默认 60
+var sessionDurationMin = 60
+
+// SetSessionDuration 设置会话持续时间（分钟）
+func SetSessionDuration(minutes int) {
+	if minutes > 0 {
+		sessionDurationMin = minutes
+	}
+}
+
+// GetSessionDuration 获取会话持续时间（分钟）
+func GetSessionDuration() int {
+	return sessionDurationMin
+}
+
 // ConversationIDManager 会话ID管理器 (SOLID-SRP: 单一职责)
 type ConversationIDManager struct {
 	mu    sync.RWMutex      // 保护cache的并发访问
@@ -22,43 +37,18 @@ func NewConversationIDManager() *ConversationIDManager {
 	}
 }
 
-// GenerateConversationID 基于客户端信息生成稳定的会话ID
-// 遵循KISS原则：使用客户端特征生成稳定的标识符
+// GenerateConversationID 生成会话ID
+// 优先使用客户端提供的 X-Conversation-ID，否则生成随机 UUID
+// 这样支持单用户多窗口，每个窗口独立会话
 func (c *ConversationIDManager) GenerateConversationID(ctx *gin.Context) string {
-	// 从请求头中获取客户端标识信息
-	clientIP := ctx.ClientIP()
-	userAgent := ctx.GetHeader("User-Agent")
-
 	// 检查是否有自定义的会话ID头（优先级最高）
 	if customConvID := ctx.GetHeader("X-Conversation-ID"); customConvID != "" {
 		return customConvID
 	}
 
-	// 为避免过于细粒度的会话分割，使用时间窗口来保持会话持久性
-	// 每小时内的同一客户端使用相同的conversationId
-	timeWindow := time.Now().Format("2006010215") // 精确到小时
-
-	// 构建客户端特征字符串
-	clientSignature := fmt.Sprintf("%s|%s|%s", clientIP, userAgent, timeWindow)
-
-	// 检查缓存 (使用读锁)
-	c.mu.RLock()
-	if cachedID, exists := c.cache[clientSignature]; exists {
-		c.mu.RUnlock()
-		return cachedID
-	}
-	c.mu.RUnlock()
-
-	// 生成基于特征的MD5哈希
-	hash := md5.Sum([]byte(clientSignature))
-	conversationID := fmt.Sprintf("conv-%x", hash[:8]) // 使用前8字节，保持简洁
-
-	// 缓存结果 (使用写锁，YAGNI: 简单内存缓存，未来可扩展为持久化)
-	c.mu.Lock()
-	c.cache[clientSignature] = conversationID
-	c.mu.Unlock()
-
-	return conversationID
+	// 没有自定义会话ID，生成随机 UUID
+	// 这样每个请求都是独立会话，支持多窗口
+	return fmt.Sprintf("conv-%s", GenerateUUID())
 }
 
 // GetOrCreateConversationID 获取或创建会话ID

@@ -27,6 +27,8 @@ type Token struct {
 	AccessToken           string
 	AccessTokenExpiresAt  time.Time
 	AvailableUsage        float64
+	BaseUsage             float64
+	FreeTrialUsage        float64
 	TotalLimit            float64
 	CurrentUsage          float64
 	LastVerifiedAt        time.Time
@@ -79,16 +81,16 @@ func (r *TokenRepository) Update(t *Token) error {
 		UPDATE tokens SET
 			auth_type = ?, client_id = ?, client_secret = ?, disabled = ?,
 			group_name = ?, name = ?, status = ?, user_email = ?, access_token = ?,
-			access_token_expires_at = ?, available_usage = ?, total_limit = ?,
-			current_usage = ?, last_verified_at = ?, last_used_at = ?, error_msg = ?,
+			access_token_expires_at = ?, available_usage = ?, base_usage = ?, free_trial_usage = ?,
+			total_limit = ?, current_usage = ?, last_verified_at = ?, last_used_at = ?, error_msg = ?,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`
 	_, err := r.db.Exec(query,
 		t.AuthType, t.ClientID, t.ClientSecret, t.Disabled,
 		t.GroupName, t.Name, t.Status, t.UserEmail, t.AccessToken,
-		t.AccessTokenExpiresAt, t.AvailableUsage, t.TotalLimit,
-		t.CurrentUsage, t.LastVerifiedAt, t.LastUsedAt, t.ErrorMsg,
+		t.AccessTokenExpiresAt, t.AvailableUsage, t.BaseUsage, t.FreeTrialUsage,
+		t.TotalLimit, t.CurrentUsage, t.LastVerifiedAt, t.LastUsedAt, t.ErrorMsg,
 		t.ID,
 	)
 	return err
@@ -302,9 +304,14 @@ func (r *TokenRepository) RefreshSingle(t *Token) (*Token, error) {
 		// 提取使用限制信息
 		for _, breakdown := range usage.UsageBreakdownList {
 			if breakdown.ResourceType == "CREDIT" {
+				// base 额度
+				t.BaseUsage = breakdown.UsageLimitWithPrecision - breakdown.CurrentUsageWithPrecision
 				t.TotalLimit = breakdown.UsageLimitWithPrecision
 				t.CurrentUsage = breakdown.CurrentUsageWithPrecision
+
+				// free_trial 额度
 				if breakdown.FreeTrialInfo != nil && breakdown.FreeTrialInfo.FreeTrialStatus == "ACTIVE" {
+					t.FreeTrialUsage = breakdown.FreeTrialInfo.UsageLimitWithPrecision - breakdown.FreeTrialInfo.CurrentUsageWithPrecision
 					t.TotalLimit += breakdown.FreeTrialInfo.UsageLimitWithPrecision
 					t.CurrentUsage += breakdown.FreeTrialInfo.CurrentUsageWithPrecision
 				}
@@ -523,6 +530,7 @@ func (r *TokenRepository) scanToken(row *sql.Row) (*Token, error) {
 		&t.AvailableUsage, &t.TotalLimit, &t.CurrentUsage,
 		&lastVerifiedAt, &lastUsedAt, &errorMsg,
 		&createdAt, &updatedAt,
+		&t.BaseUsage, &t.FreeTrialUsage,
 	)
 	if err != nil {
 		return nil, err
@@ -558,6 +566,7 @@ func (r *TokenRepository) scanTokens(rows *sql.Rows) ([]*Token, error) {
 			&t.AvailableUsage, &t.TotalLimit, &t.CurrentUsage,
 			&lastVerifiedAt, &lastUsedAt, &errorMsg,
 			&createdAt, &updatedAt,
+			&t.BaseUsage, &t.FreeTrialUsage,
 		)
 		if err != nil {
 			return nil, err

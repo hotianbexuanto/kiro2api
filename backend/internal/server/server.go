@@ -11,6 +11,7 @@ import (
 	"kiro2api/internal/server/handler"
 	"kiro2api/internal/service"
 	"kiro2api/internal/stats"
+	"kiro2api/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -59,6 +60,9 @@ func Start(port string, authService *auth.AuthService) {
 			rateLimiter.SetRate(settings.RateLimitQPS, settings.RateLimitBurst)
 			qps = settings.RateLimitQPS
 			burst = settings.RateLimitBurst
+		}
+		if settings.SessionDurationMin > 0 {
+			utils.SetSessionDuration(settings.SessionDurationMin)
 		}
 	}
 
