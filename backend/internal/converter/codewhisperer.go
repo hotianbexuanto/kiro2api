@@ -474,6 +474,51 @@ func BuildCodeWhispererRequest(anthropicReq types.AnthropicRequest, ctx *gin.Con
 				logger.Int("orphan_messages", len(userMessagesBuffer)))
 		}
 
+		// 限制历史消息长度，防止超过 AWS 上限
+		// AWS 实际上限约 163k，为安全起见限制在 180k
+		const maxTotalTokens = 180000
+
+		// 估算总 tokens（粗略：1 token ≈ 3 字符，混合中英文）
+		estimatedTokens := estimateHistoryTokens(history)
+
+		// 如果超过限制，删除最老的对话（保留 system）
+		if estimatedTokens > maxTotalTokens {
+			logger.Warn("历史消息超过限制，开始删除最老的对话",
+				logger.Int("estimated_tokens", estimatedTokens),
+				logger.Int("max_tokens", maxTotalTokens),
+				logger.Int("history_count", len(history)))
+
+			// 保留 system 部分（前 2 条：system user + assistant）
+			systemSize := 0
+			if len(history) >= 2 {
+				// 检查前两条是否是 system
+				if _, ok := history[0].(types.HistoryUserMessage); ok {
+					if _, ok := history[1].(types.HistoryAssistantMessage); ok {
+						systemSize = 2
+					}
+				}
+			}
+
+			// 从最老的对话开始删除（每次删除一对 user+assistant）
+			for estimatedTokens > maxTotalTokens && len(history) > systemSize+2 {
+				// 删除 system 后的第一对
+				if len(history) > systemSize+2 {
+					history = append(history[:systemSize], history[systemSize+2:]...)
+					estimatedTokens = estimateHistoryTokens(history)
+
+					logger.Debug("已删除一轮对话",
+						logger.Int("remaining_tokens", estimatedTokens),
+						logger.Int("remaining_count", len(history)))
+				} else {
+					break
+				}
+			}
+
+			logger.Info("历史消息限制完成",
+				logger.Int("final_tokens", estimatedTokens),
+				logger.Int("final_count", len(history)))
+		}
+
 		cwReq.ConversationState.History = history
 	}
 
@@ -483,6 +528,40 @@ func BuildCodeWhispererRequest(anthropicReq types.AnthropicRequest, ctx *gin.Con
 	}
 
 	return cwReq, nil
+}
+
+// estimateHistoryTokens 估算历史消息的 token 数量
+// 使用简单规则：1 token ≈ 3 字符（混合中英文）
+func estimateHistoryTokens(history []any) int {
+	totalChars := 0
+
+	for _, item := range history {
+		switch msg := item.(type) {
+		case types.HistoryUserMessage:
+			totalChars += len(msg.UserInputMessage.Content)
+			// 估算图片 tokens（每张图约 1000 tokens）
+			totalChars += len(msg.UserInputMessage.Images) * 3000
+			// 估算工具结果
+			for _, tr := range msg.UserInputMessage.UserInputMessageContext.ToolResults {
+				for _, c := range tr.Content {
+					if text, ok := c["text"].(string); ok {
+						totalChars += len(text)
+					}
+				}
+			}
+		case types.HistoryAssistantMessage:
+			totalChars += len(msg.AssistantResponseMessage.Content)
+			// 估算工具调用
+			for _, tu := range msg.AssistantResponseMessage.ToolUses {
+				totalChars += len(tu.Name) * 3
+				// 粗略估算 input 的大小
+				totalChars += len(fmt.Sprintf("%v", tu.Input))
+			}
+		}
+	}
+
+	// 转换为 tokens（1 token ≈ 3 字符）
+	return totalChars / 3
 }
 
 // extractToolUsesFromMessage 从助手消息内容中提取工具调用

@@ -50,7 +50,15 @@ func (trl *TokenRequestLifecycle) GetToken() (types.TokenInfo, error) {
 
 // GetTokenWithUsage 获取 token（包含使用信息）并开始请求追踪
 func (trl *TokenRequestLifecycle) GetTokenWithUsage() (*types.TokenWithUsage, error) {
-	tokenWithUsage, err := trl.authService.GetTokenWithUsage(trl.group)
+	// 提取用户标识（IP + API Key）用于 token 粘性
+	userID := trl.c.ClientIP()
+	if apiKey, exists := trl.c.Get("api_key"); exists {
+		if key, ok := apiKey.(string); ok {
+			userID += "|" + key
+		}
+	}
+
+	tokenWithUsage, err := trl.authService.GetTokenWithUsage(trl.group, userID)
 	if err != nil {
 		return nil, err
 	}

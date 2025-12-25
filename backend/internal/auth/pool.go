@@ -255,7 +255,7 @@ func (tpm *TokenPoolManager) rebuildPools() {
 
 // GetBestToken 获取最优 Token (加权随机选择)
 func (tpm *TokenPoolManager) GetBestToken(group string) (types.TokenInfo, error) {
-	result, err := tpm.GetBestTokenWithUsage(group)
+	result, err := tpm.GetBestTokenWithUsage(group, "")
 	if err != nil {
 		return types.TokenInfo{}, err
 	}
@@ -263,7 +263,7 @@ func (tpm *TokenPoolManager) GetBestToken(group string) (types.TokenInfo, error)
 }
 
 // GetBestTokenWithUsage 获取最优 Token (包含使用信息)
-func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string) (*types.TokenWithUsage, error) {
+func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string, userID string) (*types.TokenWithUsage, error) {
 	if group == "" {
 		group = GetDefaultGroup()
 	}
@@ -284,8 +284,8 @@ func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string) (*types.TokenWi
 		tpm.triggerAsyncRefresh()
 	}
 
-	// 在分组池内选择 (轮询，使用保存的cacheRef)
-	selected := pool.roundRobinSelect(cacheRef)
+	// 在分组池内选择 (使用用户粘性策略，使用保存的cacheRef)
+	selected := pool.roundRobinSelect(cacheRef, userID)
 	if selected == nil {
 		return nil, fmt.Errorf("分组 %s 没有可用的 Token", group)
 	}
@@ -315,9 +315,9 @@ func (tpm *TokenPoolManager) GetBestTokenWithUsage(group string) (*types.TokenWi
 	}, nil
 }
 
-// roundRobinSelect 轮询选择 (无锁读取，原子操作)
+// roundRobinSelect 选择 Token (支持用户粘性)
 // 调用者不需要持有 pool.mu
-func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
+func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache, userID string) *PooledToken {
 	now := time.Now()
 	tokenCount := len(gp.tokens)
 	if tokenCount == 0 {
@@ -328,61 +328,48 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
 	const maxRetries = 5                  // 最多重试 5 次
 	const retryDelay = 50 * time.Millisecond // 每次重试间隔 50ms
 
+	// 计算用户粘性索引（如果提供了 userID）
+	var preferredIndex int = -1
+	if userID != "" {
+		// 使用简单的 hash 计算固定索引
+		hash := uint64(0)
+		for i := 0; i < len(userID); i++ {
+			hash = hash*31 + uint64(userID[i])
+		}
+		preferredIndex = int(hash % uint64(tokenCount))
+	}
+
 	// 多轮遍历，避免高并发时所有 token 都达到上限导致失败
 	for retry := 0; retry < maxRetries; retry++ {
-		// 遍历一轮所有 token
+		// 如果有用户粘性，优先尝试固定的 token
+		if preferredIndex >= 0 && retry == 0 {
+			pt := gp.tokens[preferredIndex]
+			if gp.isTokenAvailable(pt, cache, now) {
+				logger.Info("用户粘性选择Token",
+					logger.Int("config_index", pt.ConfigIndex),
+					logger.Int("preferred_index", preferredIndex),
+					logger.String("user_id_prefix", userID[:minInt(20, len(userID))]))
+				return pt
+			}
+		}
+
+		// 遍历一轮所有 token（轮询策略）
 		for i := 0; i < tokenCount; i++ {
 			// 原子获取并递增索引
 			idx := atomic.AddUint64(&gp.roundRobinIndex, 1)
 			pt := gp.tokens[int(idx)%tokenCount]
 
-			// 跳过禁用/封禁/耗尽
-			if pt.Config.Disabled || pt.Config.Status == TokenStatusBanned || pt.Config.Status == TokenStatusExhausted {
-				continue
+			if gp.isTokenAvailable(pt, cache, now) {
+				if retry > 0 {
+					logger.Info("轮询选择Token（重试后成功）",
+						logger.Int("config_index", pt.ConfigIndex),
+						logger.Int("retry", retry))
+				} else {
+					logger.Info("轮询选择Token（降级）",
+						logger.Int("config_index", pt.ConfigIndex))
+				}
+				return pt
 			}
-
-			// 跳过冷却中
-			if cooldownUntil, ok := gp.cooldown[pt.ConfigIndex]; ok && now.Before(cooldownUntil) {
-				continue
-			}
-
-			// 获取缓存（加读锁保护并发访问）
-			cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, pt.ConfigIndex)
-			cache.mu.RLock()
-			cached, exists := cache.tokens[cacheKey]
-			cache.mu.RUnlock()
-			if !exists || !cached.IsUsable() || cached.Available <= 0 {
-				continue
-			}
-			pt.Cached = cached
-
-			// 检查并发限制
-			maxConcurrent := pt.MaxConcurrent
-			if maxConcurrent <= 0 {
-				maxConcurrent = defaultMaxConcurrent
-			}
-
-			currentInFlight := gp.getMetrics(pt.ConfigIndex, pt.Config.TokenID).InFlightCount()
-			if currentInFlight >= int64(maxConcurrent) {
-				continue
-			}
-
-			// 找到可用的 Token
-			if retry > 0 {
-				logger.Debug("轮询选择Token（重试后成功）",
-					logger.Int("config_index", pt.ConfigIndex),
-					logger.Int("retry", retry),
-					logger.Int("max_concurrent", int(maxConcurrent)),
-					logger.Int64("current_inflight", currentInFlight),
-					logger.Float64("available", cached.Available))
-			} else {
-				logger.Debug("轮询选择Token",
-					logger.Int("config_index", pt.ConfigIndex),
-					logger.Int("max_concurrent", int(maxConcurrent)),
-					logger.Int64("current_inflight", currentInFlight),
-					logger.Float64("available", cached.Available))
-			}
-			return pt
 		}
 
 		// 一轮遍历后没找到，等待一小段时间后重试
@@ -402,6 +389,52 @@ func (gp *GroupPool) roundRobinSelect(cache *SimpleTokenCache) *PooledToken {
 		logger.Int("max_retries", maxRetries),
 		logger.String("group", gp.name))
 	return nil
+}
+
+// isTokenAvailable 检查 token 是否可用
+func (gp *GroupPool) isTokenAvailable(pt *PooledToken, cache *SimpleTokenCache, now time.Time) bool {
+	const defaultMaxConcurrent = int32(5)
+
+	// 跳过禁用/封禁/耗尽
+	if pt.Config.Disabled || pt.Config.Status == TokenStatusBanned || pt.Config.Status == TokenStatusExhausted {
+		return false
+	}
+
+	// 跳过冷却中
+	if cooldownUntil, ok := gp.cooldown[pt.ConfigIndex]; ok && now.Before(cooldownUntil) {
+		return false
+	}
+
+	// 获取缓存（加读锁保护并发访问）
+	cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, pt.ConfigIndex)
+	cache.mu.RLock()
+	cached, exists := cache.tokens[cacheKey]
+	cache.mu.RUnlock()
+	if !exists || !cached.IsUsable() || cached.Available <= 0 {
+		return false
+	}
+	pt.Cached = cached
+
+	// 检查并发限制
+	maxConcurrent := pt.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxConcurrent
+	}
+
+	currentInFlight := gp.getMetrics(pt.ConfigIndex, pt.Config.TokenID).InFlightCount()
+	if currentInFlight >= int64(maxConcurrent) {
+		return false
+	}
+
+	return true
+}
+
+// minInt 返回两个整数中的较小值
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // getMetrics 获取或创建 metrics
