@@ -527,10 +527,10 @@ func (r *TokenRepository) scanToken(row *sql.Row) (*Token, error) {
 		&t.ID, &t.AuthType, &t.RefreshToken, &clientID, &clientSecret,
 		&t.Disabled, &t.GroupName, &name, &t.Status,
 		&userEmail, &accessToken, &accessTokenExpiresAt,
-		&t.AvailableUsage, &t.TotalLimit, &t.CurrentUsage,
+		&t.AvailableUsage, &t.BaseUsage, &t.FreeTrialUsage,
+		&t.TotalLimit, &t.CurrentUsage,
 		&lastVerifiedAt, &lastUsedAt, &errorMsg,
 		&createdAt, &updatedAt,
-		&t.BaseUsage, &t.FreeTrialUsage,
 	)
 	if err != nil {
 		return nil, err
@@ -563,10 +563,10 @@ func (r *TokenRepository) scanTokens(rows *sql.Rows) ([]*Token, error) {
 			&t.ID, &t.AuthType, &t.RefreshToken, &clientID, &clientSecret,
 			&t.Disabled, &t.GroupName, &name, &t.Status,
 			&userEmail, &accessToken, &accessTokenExpiresAt,
-			&t.AvailableUsage, &t.TotalLimit, &t.CurrentUsage,
+			&t.AvailableUsage, &t.BaseUsage, &t.FreeTrialUsage,
+			&t.TotalLimit, &t.CurrentUsage,
 			&lastVerifiedAt, &lastUsedAt, &errorMsg,
 			&createdAt, &updatedAt,
-			&t.BaseUsage, &t.FreeTrialUsage,
 		)
 		if err != nil {
 			return nil, err
