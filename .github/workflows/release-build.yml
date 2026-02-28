@@ -61,50 +61,11 @@ jobs:
       - name: Package runtime files
         run: |
           mkdir -p dist/windows/backend/data
-
-          # Copy frontend static files
           cp -r backend/static dist/windows/backend/static
-
-          # Copy config if exists
           [ -f backend/auth_config.json ] && cp backend/auth_config.json dist/windows/backend/auth_config.json || true
-
-          # Copy env example
           [ -f .env.example ] && cp .env.example dist/windows/backend/.env.example || true
-
-          # Create start script
-          cat > dist/windows/backend/start.bat << 'BATEOF'
-@echo off
-cd /d %~dp0
-echo Starting kiro2api server...
-echo Web UI: http://localhost:8080
-kiro2api.exe
-pause
-BATEOF
-
-          # Create README
-          cat > dist/windows/README.txt << 'READMEEOF'
-kiro2api - AI API Proxy Server
-================================
-
-Quick Start:
-  1. Enter backend/ directory
-  2. (Optional) Copy .env.example to .env and edit settings
-  3. Double-click start.bat  (or run kiro2api.exe in terminal)
-  4. Open http://localhost:8080 in browser
-
-Files:
-  backend/kiro2api.exe      - API server (main program)
-  backend/test_models.exe   - Test client (NOT the server)
-  backend/start.bat         - Quick start script
-  backend/static/           - Web UI files
-  backend/data/             - Database will be created here
-  backend/.env.example      - Environment config template
-
-Important:
-  - Always run kiro2api.exe from the backend/ directory
-  - Database path is relative: ./data/kiro2api.db
-  - Default port: 8080 (change via PORT in .env)
-READMEEOF
+          printf '@echo off\r\ncd /d %%~dp0\r\necho Starting kiro2api server...\r\necho Web UI: http://localhost:8080\r\nkiro2api.exe\r\npause\r\n' > dist/windows/backend/start.bat
+          printf 'kiro2api - AI API Proxy Server\r\n================================\r\n\r\nQuick Start:\r\n  1. Enter backend/ directory\r\n  2. (Optional) Copy .env.example to .env and edit settings\r\n  3. Double-click start.bat (or run kiro2api.exe in terminal)\r\n  4. Open http://localhost:8080 in browser\r\n\r\nFiles:\r\n  backend/kiro2api.exe      - API server (main program)\r\n  backend/test_models.exe   - Test client (NOT the server)\r\n  backend/start.bat         - Quick start script\r\n  backend/static/           - Web UI files\r\n  backend/data/             - Database will be created here\r\n  backend/.env.example      - Environment config template\r\n\r\nImportant:\r\n  - Always run kiro2api.exe from the backend/ directory\r\n  - Database path is relative: ./data/kiro2api.db\r\n  - Default port: 8080 (change via PORT in .env)\r\n' > dist/windows/README.txt
 
       - name: Upload downloadable artifact
         uses: actions/upload-artifact@v4
