@@ -1,90 +1,91 @@
-name: Build and Push Docker Image
+name: Build Downloadable Windows Package
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Tag to build and push (must start with v)'
+      main_package:
+        description: 'Go main package path (e.g. ./cmd/kiro2api)'
         required: true
-        default: 'v1.0.0'
+        default: './cmd/kiro2api'
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  GO_VERSION: '1.24.x'
+  NODE_VERSION: '22'
+  MAIN_PACKAGE: ${{ github.event.inputs.main_package || './cmd/kiro2api' }}
 
 jobs:
-  build:
+  build-windows-artifact:
+    name: Build Windows artifact with frontend
     runs-on: ubuntu-latest
-    # 只有在推送的标签以 v 开头，或者手动触发时输入的标签以 v 开头时才执行
-    if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v'))
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
 
-    - name: Extract metadata for release
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=tag
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-          type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+      - name: Build frontend (output to backend/static)
+        working-directory: frontend
+        run: npm run build
 
-    - name: Build and push Docker image
-      id: push
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
 
-    - name: Generate artifact attestation
-      uses: actions/attest-build-provenance@v1
-      with:
-        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
-        subject-digest: ${{ steps.push.outputs.digest }}
-        push-to-registry: true
+      - name: Build Windows backend binary
+        working-directory: backend
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -o ../dist/windows/backend/kiro2api.exe ${{ env.MAIN_PACKAGE }}
 
-    - name: Update summary with build info
-      run: |
-        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "🎉 Successfully built and pushed Docker image:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Image:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Digest:** ${{ steps.push.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Pull the image:" >> $GITHUB_STEP_SUMMARY
-        echo '```bash' >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Package runtime files
+        run: |
+          mkdir -p dist/windows/backend/data
+          cp -r backend/static dist/windows/backend/static
+          cp backend/auth_config.json dist/windows/backend/auth_config.json
+          cp .env.example dist/windows/.env.example
+          cat > dist/windows/backend/start.bat <<'EOF'
+          @echo off
+          cd /d %~dp0
+          kiro2api.exe
+          EOF
+          cat > dist/windows/README-WINDOWS.txt <<'EOF'
+          1) Edit .env.example and set required environment variables.
+          2) Keep runtime working directory as backend/.
+          3) Run backend\\start.bat (or backend\\kiro2api.exe directly in backend/).
+          4) Open http://localhost:8080 to access the web management UI.
+          EOF
+
+      - name: Upload downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro2api-windows-with-frontend-${{ github.ref_name }}
+          path: dist/windows
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Built Windows downloadable package with frontend" >> $GITHUB_STEP_SUMMARY
+          echo "- Artifact name: kiro2api-windows-with-frontend-${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Includes: backend/kiro2api.exe + backend/static + auth_config.json" >> $GITHUB_STEP_SUMMARY
+          echo "- Download: Actions > this run > Artifacts" >> $GITHUB_STEP_SUMMARY
