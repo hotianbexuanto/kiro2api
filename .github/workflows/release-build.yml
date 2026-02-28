@@ -9,14 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       main_package:
-        description: 'Go main package path (e.g. ./cmd/kiro2api)'
-        required: true
-        default: './cmd/kiro2api'
+        description: 'Go main package path (optional, e.g. ./cmd/kiro2api)'
+        required: false
+        default: ''
 
 env:
   GO_VERSION: '1.24.x'
   NODE_VERSION: '22'
-  MAIN_PACKAGE: ${{ github.event.inputs.main_package || './cmd/kiro2api' }}
 
 jobs:
   build-windows-artifact:
@@ -48,13 +47,56 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
 
+      - name: Detect backend main package
+        id: detect_main
+        working-directory: backend
+        run: |
+          set -euo pipefail
+
+          INPUT_MAIN_PACKAGE="${{ github.event.inputs.main_package || '' }}"
+
+          if [[ -n "$INPUT_MAIN_PACKAGE" ]]; then
+            if go list "$INPUT_MAIN_PACKAGE" >/dev/null 2>&1; then
+              echo "main_package=$INPUT_MAIN_PACKAGE" >> "$GITHUB_OUTPUT"
+              echo "Using manual main package: $INPUT_MAIN_PACKAGE"
+              exit 0
+            fi
+            echo "Manual main package is invalid: $INPUT_MAIN_PACKAGE"
+            exit 1
+          fi
+
+          for candidate in ./cmd/kiro2api ./cmd/server ./cmd/api; do
+            if go list "$candidate" >/dev/null 2>&1; then
+              echo "main_package=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Detected main package: $candidate"
+              exit 0
+            fi
+          done
+
+          AUTO_MAIN="$(go list -f '{{if and (eq .Name "main") (or (eq .ImportPath "kiro2api") (eq .ImportPath "kiro2api/cmd/kiro2api") (eq .ImportPath "kiro2api/cmd/server"))}}{{.ImportPath}}{{end}}' ./... | head -n1)"
+
+          if [[ -n "$AUTO_MAIN" ]]; then
+            if [[ "$AUTO_MAIN" == kiro2api ]]; then
+              echo "main_package=." >> "$GITHUB_OUTPUT"
+              echo "Detected main package: ."
+            else
+              echo "main_package=./${AUTO_MAIN#kiro2api/}" >> "$GITHUB_OUTPUT"
+              echo "Detected main package: ./${AUTO_MAIN#kiro2api/}"
+            fi
+            exit 0
+          fi
+
+          echo "Cannot detect backend main package automatically."
+          echo "Please run workflow_dispatch and set input 'main_package', e.g. ./cmd/kiro2api"
+          exit 1
+
       - name: Build Windows backend binary
         working-directory: backend
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o ../dist/windows/backend/kiro2api.exe ${{ env.MAIN_PACKAGE }}
+        run: go build -o ../dist/windows/backend/kiro2api.exe ${{ steps.detect_main.outputs.main_package }}
 
       - name: Package runtime files
         run: |
@@ -87,5 +129,6 @@ jobs:
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "✅ Built Windows downloadable package with frontend" >> $GITHUB_STEP_SUMMARY
           echo "- Artifact name: kiro2api-windows-with-frontend-${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Main package: ${{ steps.detect_main.outputs.main_package }}" >> $GITHUB_STEP_SUMMARY
           echo "- Includes: backend/kiro2api.exe + backend/static + auth_config.json" >> $GITHUB_STEP_SUMMARY
           echo "- Download: Actions > this run > Artifacts" >> $GITHUB_STEP_SUMMARY
