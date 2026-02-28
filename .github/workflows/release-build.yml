@@ -7,11 +7,6 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      main_package:
-        description: 'Go main package path (optional, e.g. ./cmd/kiro2api)'
-        required: false
-        default: ''
 
 env:
   GO_VERSION: '1.24.x'
@@ -47,92 +42,87 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
 
-      - name: Detect backend main package
-        id: detect_main
-        working-directory: backend
-        run: |
-          set -euo pipefail
-
-          INPUT_MAIN_PACKAGE="${{ github.event.inputs.main_package || '' }}"
-
-          if [[ -n "$INPUT_MAIN_PACKAGE" ]]; then
-            if go list "$INPUT_MAIN_PACKAGE" >/dev/null 2>&1; then
-              echo "main_package=$INPUT_MAIN_PACKAGE" >> "$GITHUB_OUTPUT"
-              echo "Using manual main package: $INPUT_MAIN_PACKAGE"
-              exit 0
-            fi
-            echo "Manual main package is invalid: $INPUT_MAIN_PACKAGE"
-            exit 1
-          fi
-
-          for candidate in ./cmd/kiro2api ./cmd/server ./cmd/api; do
-            if go list "$candidate" >/dev/null 2>&1; then
-              echo "main_package=$candidate" >> "$GITHUB_OUTPUT"
-              echo "Detected main package: $candidate"
-              exit 0
-            fi
-          done
-
-          AUTO_MAIN="$(go list -f '{{if and (eq .Name "main") (hasPrefix .ImportPath "kiro2api/cmd/")}}{{.ImportPath}}{{end}}' ./cmd/... 2>/dev/null | head -n1)"
-          if [[ -n "$AUTO_MAIN" ]]; then
-            echo "main_package=./${AUTO_MAIN#kiro2api/}" >> "$GITHUB_OUTPUT"
-            echo "Detected main package: ./${AUTO_MAIN#kiro2api/}"
-            exit 0
-          fi
-
-          echo "Cannot detect backend main package automatically."
-          echo "Expected path like ./cmd/kiro2api, but no main package was found under ./cmd/."
-          echo "Please run workflow_dispatch and set input 'main_package' to your real server entry package."
-          exit 1
-
-      - name: Build Windows backend binary
+      - name: Build kiro2api.exe (API server)
         working-directory: backend
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o ../dist/windows/backend/kiro2api.exe ${{ steps.detect_main.outputs.main_package }}
+        run: go build -ldflags="-s -w" -o ../dist/windows/backend/kiro2api.exe ./cmd/kiro2api
 
-      - name: Build Windows test_models binary
+      - name: Build test_models.exe (test client)
         working-directory: backend
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o ../dist/windows/backend/test_models.exe ./test_models.go
+        run: go build -ldflags="-s -w" -o ../dist/windows/backend/test_models.exe ./test_models.go
 
       - name: Package runtime files
         run: |
           mkdir -p dist/windows/backend/data
+
+          # Copy frontend static files
           cp -r backend/static dist/windows/backend/static
-          cp backend/auth_config.json dist/windows/backend/auth_config.json
-          cp .env.example dist/windows/.env.example
-          cat > dist/windows/backend/start.bat <<'EOF'
-          @echo off
-          cd /d %~dp0
-          kiro2api.exe
-          EOF
-          cat > dist/windows/README-WINDOWS.txt <<'EOF'
-          1) Edit .env.example and set required environment variables.
-          2) Keep runtime working directory as backend/.
-          3) Run backend\\start.bat (or backend\\kiro2api.exe directly in backend/) to start API service.
-          4) Open http://localhost:8080 to access the web management UI.
-          5) test_models.exe is a pressure test client and is not the API server.
-          EOF
+
+          # Copy config if exists
+          [ -f backend/auth_config.json ] && cp backend/auth_config.json dist/windows/backend/auth_config.json || true
+
+          # Copy env example
+          [ -f .env.example ] && cp .env.example dist/windows/backend/.env.example || true
+
+          # Create start script
+          cat > dist/windows/backend/start.bat << 'BATEOF'
+@echo off
+cd /d %~dp0
+echo Starting kiro2api server...
+echo Web UI: http://localhost:8080
+kiro2api.exe
+pause
+BATEOF
+
+          # Create README
+          cat > dist/windows/README.txt << 'READMEEOF'
+kiro2api - AI API Proxy Server
+================================
+
+Quick Start:
+  1. Enter backend/ directory
+  2. (Optional) Copy .env.example to .env and edit settings
+  3. Double-click start.bat  (or run kiro2api.exe in terminal)
+  4. Open http://localhost:8080 in browser
+
+Files:
+  backend/kiro2api.exe      - API server (main program)
+  backend/test_models.exe   - Test client (NOT the server)
+  backend/start.bat         - Quick start script
+  backend/static/           - Web UI files
+  backend/data/             - Database will be created here
+  backend/.env.example      - Environment config template
+
+Important:
+  - Always run kiro2api.exe from the backend/ directory
+  - Database path is relative: ./data/kiro2api.db
+  - Default port: 8080 (change via PORT in .env)
+READMEEOF
 
       - name: Upload downloadable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kiro2api-windows-with-frontend-${{ github.ref_name }}
+          name: kiro2api-windows-${{ github.ref_name }}
           path: dist/windows
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Build summary
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "✅ Built Windows downloadable package with frontend" >> $GITHUB_STEP_SUMMARY
-          echo "- Artifact name: kiro2api-windows-with-frontend-${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Main package: ${{ steps.detect_main.outputs.main_package }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Includes: backend/kiro2api.exe + backend/test_models.exe + backend/static + auth_config.json" >> $GITHUB_STEP_SUMMARY
-          echo "- Download: Actions > this run > Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`backend/kiro2api.exe\` | API server |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`backend/test_models.exe\` | Test client |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`backend/static/\` | Web UI |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download from **Actions → this run → Artifacts**" >> $GITHUB_STEP_SUMMARY
